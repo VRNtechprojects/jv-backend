@@ -10,7 +10,6 @@ const {
 
 const SHEET_NAME = "Proposal Done Leads";
 
-// Column mapping (0-indexed) - Proposal Done Leads sheet
 const COL = {
   TIMESTAMP: 0,
   ENQ_NO: 1,
@@ -22,29 +21,23 @@ const COL = {
   CONTACT_INFO: 7,
   CONCERN_PERSON: 8,
 
-  // Step 2 file columns (copied from FMS)
-  AKS: 14,               // O
-  KHASRA: 15,            // P
-  OLD_DOCUMENT: 16,      // Q
-  LAND_SURVEY: 17,       // R
+  AKS: 14,
+  KHASRA: 15,
+  OLD_DOCUMENT: 16,
+  LAND_SURVEY: 17,
+  PDF_FOLDER: 26,
 
-  // Folder link
-  PDF_FOLDER: 26,        // AA
+  STEP4_TYPE_OF_PROJECT: 27,
+  STEP4_CAD_FILE: 28,
+  STEP4_CALC_LINK: 29,
 
-  // Step 4 file columns (copied from FMS)
-  STEP4_TYPE_OF_PROJECT: 27,  // AB
-  STEP4_CAD_FILE: 28,         // AC
-  STEP4_CALC_LINK: 29,        // AD
-
-  // Step 7: Agreement
-  STEP7_PLANNED: 40,    // AO
-  STEP7_ACTUAL: 41,     // AP
-  STEP7_STATUS: 42,     // AQ
-  STEP7_MINUTES: 43,    // AR - Minutes of the meeting
-  STEP7_VOICE: 44,      // AS - Voice recording
+  STEP7_PLANNED: 40,
+  STEP7_ACTUAL: 41,
+  STEP7_STATUS: 42,
+  STEP7_MINUTES: 43,
+  STEP7_VOICE: 44,
 };
 
-// Helper: column index to letter
 function colLetter(index) {
   if (index < 26) return String.fromCharCode(65 + index);
   return String.fromCharCode(64 + Math.floor(index / 26)) + String.fromCharCode(65 + (index % 26));
@@ -57,13 +50,11 @@ function formatDateTime(dateStr) {
   return dateVal.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 }
 
-// Helper: get current timestamp in IST
 function getCurrentTimestamp() {
   return new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 }
 
-// GET /api/fms/step7 - Get Step 7 leads
-// Filter: Planned (AO) filled + Actual (AP) empty
+// GET /api/fms/step7
 router.get("/", async (req, res) => {
   try {
     const data = await getSheetData(SHEET_NAME);
@@ -94,18 +85,14 @@ router.get("/", async (req, res) => {
           location: row[COL.LOCATION] || "",
           contactInfo: row[COL.CONTACT_INFO] || "",
           concernPerson: row[COL.CONCERN_PERSON] || "",
-          // File columns from Step 2
           aks: row[COL.AKS] || "",
           khasra: row[COL.KHASRA] || "",
           oldDocument: row[COL.OLD_DOCUMENT] || "",
           landSurvey: row[COL.LAND_SURVEY] || "",
-          // Folder link
           pdfFolder: row[COL.PDF_FOLDER] || "",
-          // File columns from Step 4
           step4TypeOfProject: row[COL.STEP4_TYPE_OF_PROJECT] || "",
           step4CadFile: row[COL.STEP4_CAD_FILE] || "",
           step4CalcLink: row[COL.STEP4_CALC_LINK] || "",
-          // Step 7 fields
           step7Planned: planned,
           step7Actual: actual,
           step7Status: row[COL.STEP7_STATUS] || "",
@@ -122,7 +109,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-// POST /api/fms/step7/update - Done = move to DONE sheet
+// POST /api/fms/step7/update
 router.post("/update", async (req, res) => {
   try {
     const { rowIndex, enqNo, status, plannedOverride } = req.body;
@@ -137,20 +124,56 @@ router.post("/update", async (req, res) => {
       return res.json({ success: true, message: "Planned date updated successfully" });
     }
 
-    if (status !== "Done") {
-      return res.status(400).json({ error: "Only 'Done' status is allowed for Step 7" });
+    if (!status) {
+      return res.status(400).json({ error: "Status is required" });
     }
 
-    // Update Status (AQ)
+    // ✅ MOVE TO COLD LEADS / NOT QUALIFIED
+    if (status === "Cold Lead" || status === "Not Qualified Lead") {
+      const data = await getSheetData(SHEET_NAME);
+      const row = data[rowIndex - 1];
+
+      if (!row || row[COL.ENQ_NO] !== enqNo) {
+        return res.status(400).json({ error: "Lead not found or EnQ No mismatch" });
+      }
+
+      const destSheet = status === "Cold Lead" ? SHEETS.COLD_LEADS : SHEETS.NOT_QUALIFIED;
+
+      const leadData = [
+        getCurrentTimestamp(),
+        row[COL.ENQ_NO] || "",
+        row[COL.LEAD_FROM] || "",
+        row[COL.CLIENT_NAME] || "",
+        row[COL.PARTNER_TYPE] || "",
+        row[COL.PURPOSE] || "",
+        row[COL.LOCATION] || "",
+        row[COL.CONTACT_INFO] || "",
+        row[COL.CONCERN_PERSON] || "",
+        "",
+        "",
+      ];
+
+      await appendRow(destSheet, leadData);
+      await deleteRow(SHEET_NAME, rowIndex);
+
+      return res.json({
+        success: true,
+        message: `Lead moved to ${status === "Cold Lead" ? "Cold Leads" : "Not Qualified Leads"}`,
+        movedTo: destSheet,
+      });
+    }
+
+    // DONE
+    if (status !== "Done") {
+      return res.status(400).json({ error: "Invalid status" });
+    }
+
     await updateCell(SHEET_NAME, `${colLetter(COL.STEP7_STATUS)}${rowIndex}`, [status]);
 
     if (plannedOverride && plannedOverride.trim()) {
       await updateCell(SHEET_NAME, `${colLetter(COL.STEP7_PLANNED)}${rowIndex}`, [formatDateTime(plannedOverride)]);
     }
 
-    // Actual (AP) will be auto-filled by sheet formula
-
-    // Read row data to move to DONE sheet
     const data = await getSheetData(SHEET_NAME);
     const row = data[rowIndex - 1];
 
@@ -158,26 +181,21 @@ router.post("/update", async (req, res) => {
       return res.status(400).json({ error: "Lead not found or EnQ No mismatch" });
     }
 
-    // Prepare DONE sheet row (A-K basic info)
-    // ✅ USE CURRENT TIMESTAMP
     const doneRow = [
-      getCurrentTimestamp(),           // A - ✅ CURRENT timestamp
-      row[COL.ENQ_NO] || "",           // B
-      row[COL.LEAD_FROM] || "",        // C
-      row[COL.CLIENT_NAME] || "",      // D
-      row[COL.PARTNER_TYPE] || "",     // E
-      row[COL.PURPOSE] || "",          // F
-      row[COL.LOCATION] || "",         // G
-      row[COL.CONTACT_INFO] || "",     // H
-      row[COL.CONCERN_PERSON] || "",   // I
-      "",                              // J - Status blank
-      "",                              // K - Remark blank
+      getCurrentTimestamp(),
+      row[COL.ENQ_NO] || "",
+      row[COL.LEAD_FROM] || "",
+      row[COL.CLIENT_NAME] || "",
+      row[COL.PARTNER_TYPE] || "",
+      row[COL.PURPOSE] || "",
+      row[COL.LOCATION] || "",
+      row[COL.CONTACT_INFO] || "",
+      row[COL.CONCERN_PERSON] || "",
+      "",
+      "",
     ];
 
-    // Append to DONE sheet
     await appendRow(SHEETS.DONE, doneRow);
-
-    // Delete from Proposal Done Leads
     await deleteRow(SHEET_NAME, rowIndex);
 
     res.json({

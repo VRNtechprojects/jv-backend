@@ -35,8 +35,6 @@ const COL = {
   STEP6_ACTUAL: 36,
   STEP6_STATUS: 37,
   STEP6_FOLLOW_COUNTER: 39,
-
-  STEP7_PLANNED: 40,
 };
 
 function colLetter(index) {
@@ -55,8 +53,7 @@ function getCurrentTimestamp() {
   return new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 }
 
-// GET /api/fms/step6
-// Filter: Planned filled + Actual empty + Status !== "Hold"
+// GET /api/fms/proposal-hold
 router.get("/", async (req, res) => {
   try {
     const data = await getSheetData(SHEET_NAME);
@@ -70,13 +67,13 @@ router.get("/", async (req, res) => {
       let row = data[i];
       if (!row || !row[COL.ENQ_NO]) continue;
 
-      while (row.length <= COL.STEP7_PLANNED) row.push("");
+      while (row.length <= COL.STEP6_FOLLOW_COUNTER) row.push("");
 
       const planned = (row[COL.STEP6_PLANNED] || "").toString().trim();
       const actual = (row[COL.STEP6_ACTUAL] || "").toString().trim();
       const status = (row[COL.STEP6_STATUS] || "").toString().trim();
 
-      if (planned && !actual && status !== "Hold") {
+      if (planned && !actual && status === "Hold") {
         leads.push({
           rowIndex: i + 1,
           timestamp: row[COL.TIMESTAMP] || "",
@@ -106,45 +103,30 @@ router.get("/", async (req, res) => {
 
     res.json({ leads });
   } catch (err) {
-    console.error("Step 6 list error:", err);
-    res.status(500).json({ error: "Failed to fetch Step 6 leads", details: err.message });
+    console.error("Proposal Hold list error:", err);
+    res.status(500).json({ error: "Failed to fetch Proposal Hold leads", details: err.message });
   }
 });
 
-// POST /api/fms/step6/update
+// POST /api/fms/proposal-hold/update
 router.post("/update", async (req, res) => {
   try {
-    const { rowIndex, enqNo, status, plannedOverride, nextStepPlanned } = req.body;
+    const { rowIndex, enqNo, action, plannedOverride } = req.body;
 
     if (!rowIndex || !enqNo) {
       return res.status(400).json({ error: "rowIndex and enqNo are required" });
     }
 
-    // CASE 1: ONLY PLANNED DATE UPDATE
-    if (!status && plannedOverride) {
-      await updateCell(
-        SHEET_NAME,
-        `${colLetter(COL.STEP6_PLANNED)}${rowIndex}`,
-        [formatDateTime(plannedOverride)]
-      );
-      return res.json({ success: true, message: "Planned date updated successfully" });
+    // Verify row exists
+    const data = await getSheetData(SHEET_NAME);
+    const row = data[rowIndex - 1];
+
+    if (!row || (row[COL.ENQ_NO] || "").trim() !== enqNo.trim()) {
+      return res.status(400).json({ error: "Lead not found or EnQ No mismatch" });
     }
 
-    if (!status) {
-      return res.status(400).json({ error: "Status is required" });
-    }
-
-    // ✅ MOVE TO COLD LEADS / NOT QUALIFIED
-    if (status === "Cold Lead" || status === "Not Qualified Lead") {
-      const data = await getSheetData(SHEET_NAME);
-      const row = data[rowIndex - 1];
-
-      if (!row || row[COL.ENQ_NO] !== enqNo) {
-        return res.status(400).json({ error: "Lead not found or EnQ No mismatch" });
-      }
-
-      const destSheet = status === "Cold Lead" ? SHEETS.COLD_LEADS : SHEETS.NOT_QUALIFIED;
-
+    // ✅ MOVE TO COLD LEADS
+    if (action === "Cold Lead") {
       const leadData = [
         getCurrentTimestamp(),
         row[COL.ENQ_NO] || "",
@@ -159,82 +141,69 @@ router.post("/update", async (req, res) => {
         "",
       ];
 
-      await appendRow(destSheet, leadData);
+      await appendRow(SHEETS.COLD_LEADS, leadData);
       await deleteRow(SHEET_NAME, rowIndex);
 
       return res.json({
         success: true,
-        message: `Lead moved to ${status === "Cold Lead" ? "Cold Leads" : "Not Qualified Leads"}`,
-        movedTo: destSheet,
+        message: "Lead moved to Cold Leads",
+        movedTo: SHEETS.COLD_LEADS,
       });
     }
 
-    // HOLD
-    if (status === "Hold") {
-      await updateCell(SHEET_NAME, `${colLetter(COL.STEP6_STATUS)}${rowIndex}`, ["Hold"]);
+    // ✅ MOVE TO NOT QUALIFIED
+    if (action === "Not Qualified Lead") {
+      const leadData = [
+        getCurrentTimestamp(),
+        row[COL.ENQ_NO] || "",
+        row[COL.LEAD_FROM] || "",
+        row[COL.CLIENT_NAME] || "",
+        row[COL.PARTNER_TYPE] || "",
+        row[COL.PURPOSE] || "",
+        row[COL.LOCATION] || "",
+        row[COL.CONTACT_INFO] || "",
+        row[COL.CONCERN_PERSON] || "",
+        "",
+        "",
+      ];
 
-      if (plannedOverride && plannedOverride.trim()) {
-        await updateCell(SHEET_NAME, `${colLetter(COL.STEP6_PLANNED)}${rowIndex}`, [formatDateTime(plannedOverride)]);
-      }
+      await appendRow(SHEETS.NOT_QUALIFIED, leadData);
+      await deleteRow(SHEET_NAME, rowIndex);
 
       return res.json({
         success: true,
-        message: "Lead put on Hold. It will appear in Proposal Hold tab.",
+        message: "Lead moved to Not Qualified Leads",
+        movedTo: SHEETS.NOT_QUALIFIED,
       });
     }
 
-    // RESCHEDULE
-    if (status === "Reschedule") {
-      if (!plannedOverride || !plannedOverride.trim()) {
-        return res.status(400).json({ error: "New planned date is required for Reschedule" });
+    // MOVE TO FOLLOW UP
+    if (action === "Move to Follow Up") {
+      const currentStatus = (row[COL.STEP6_STATUS] || "").trim();
+      if (currentStatus !== "Hold") {
+        return res.status(400).json({ error: "Lead is not on Hold" });
       }
 
-      const data = await getSheetData(SHEET_NAME);
-      const row = data[rowIndex - 1];
-      if (!row) return res.status(400).json({ error: "Row not found" });
-
-      while (row.length <= COL.STEP6_FOLLOW_COUNTER) row.push("");
-
-      const currentCounter = parseInt(row[COL.STEP6_FOLLOW_COUNTER] || "0", 10);
-      const newCounter = currentCounter + 1;
-
-      await updateCell(SHEET_NAME, `${colLetter(COL.STEP6_PLANNED)}${rowIndex}`, [formatDateTime(plannedOverride)]);
-      await updateCell(SHEET_NAME, `${colLetter(COL.STEP6_FOLLOW_COUNTER)}${rowIndex}`, [newCounter.toString()]);
       await updateCell(SHEET_NAME, `${colLetter(COL.STEP6_STATUS)}${rowIndex}`, [""]);
 
-      return res.json({
-        success: true,
-        message: `Rescheduled. Follow-up count: ${newCounter}`,
-      });
-    }
-
-    // DONE
-    if (status === "Done") {
-      if (!nextStepPlanned || !nextStepPlanned.trim()) {
-        return res.status(400).json({ error: "Step 7 Planned Date is required when marking as Done" });
-      }
-
-      await updateCell(SHEET_NAME, `${colLetter(COL.STEP6_STATUS)}${rowIndex}`, [status]);
-
-      const currentTimestamp = getCurrentTimestamp();
-      await updateCell(SHEET_NAME, `${colLetter(COL.STEP6_ACTUAL)}${rowIndex}`, [currentTimestamp]);
-
       if (plannedOverride && plannedOverride.trim()) {
-        await updateCell(SHEET_NAME, `${colLetter(COL.STEP6_PLANNED)}${rowIndex}`, [formatDateTime(plannedOverride)]);
+        await updateCell(
+          SHEET_NAME,
+          `${colLetter(COL.STEP6_PLANNED)}${rowIndex}`,
+          [formatDateTime(plannedOverride)]
+        );
       }
-
-      await updateCell(SHEET_NAME, `${colLetter(COL.STEP7_PLANNED)}${rowIndex}`, [formatDateTime(nextStepPlanned)]);
 
       return res.json({
         success: true,
-        message: "Step 6 Done! Lead will move to Step 7.",
+        message: "Lead moved back to Follow Up successfully!",
       });
     }
 
-    return res.status(400).json({ error: "Invalid status" });
+    return res.status(400).json({ error: "Invalid action" });
 
   } catch (err) {
-    console.error("Step 6 update error:", err);
+    console.error("Proposal Hold update error:", err);
     res.status(500).json({ error: "Update failed", details: err.message });
   }
 });

@@ -11,7 +11,6 @@ const {
 const SHEET_NAME = SHEETS.FMS;
 const PROPOSAL_DONE_SHEET = "Proposal Done Leads";
 
-// Column mapping (0-indexed) - FMS sheet
 const COL = {
   TIMESTAMP: 0,
   ENQ_NO: 1,
@@ -23,39 +22,37 @@ const COL = {
   CONTACT_INFO: 7,
   CONCERN_PERSON: 8,
 
-  // Step 2 file columns
   AKS: 14,
   KHASRA: 15,
   OLD_DOCUMENT: 16,
   LAND_SURVEY: 17,
   PDF_FOLDER: 26,
 
-  // Step 4 file columns
   STEP4_TYPE_OF_PROJECT: 27,
   STEP4_CAD_FILE: 28,
   STEP4_CALC_LINK: 29,
 
-  // Step 5 columns
-  STEP5_PLANNED: 31,  // AF
-  STEP5_ACTUAL: 32,   // AG
-  STEP5_STATUS: 33,   // AH
-  // AI = index 34 (Time Delay - last column to copy)
+  STEP5_PLANNED: 31,
+  STEP5_ACTUAL: 32,
+  STEP5_STATUS: 33,
 };
 
-const MAX_FMS_COL = 34; // AI = index 34, copy B(1) to AI(34)
+const MAX_FMS_COL = 34;
 
-// Helper: column index to letter
 function colLetter(index) {
   if (index < 26) return String.fromCharCode(65 + index);
   return String.fromCharCode(64 + Math.floor(index / 26)) + String.fromCharCode(65 + (index % 26));
 }
 
-// Helper: format datetime for sheet
 function formatDateTime(dateStr) {
   if (!dateStr) return "";
   const dateVal = new Date(dateStr);
   if (isNaN(dateVal.getTime())) return dateStr;
   return dateVal.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+}
+
+function getCurrentTimestamp() {
+  return new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 }
 
 // GET /api/fms/step5
@@ -130,13 +127,55 @@ router.post("/update", async (req, res) => {
       return res.json({ success: true, message: "Planned date updated successfully" });
     }
 
-    if (status !== "Done") {
-      return res.status(400).json({ error: "Only 'Done' status is allowed for Step 5" });
+    if (!status) {
+      return res.status(400).json({ error: "Status is required" });
     }
 
-    // ===== DONE: Update status, then move to Proposal Done Leads =====
+    // =============================
+    // ✅ NEW: MOVE TO COLD LEADS / NOT QUALIFIED
+    // =============================
+    if (status === "Cold Lead" || status === "Not Qualified Lead") {
+      const data = await getSheetData(SHEET_NAME);
+      const row = data[rowIndex - 1];
 
-    // First update status so formula can fill Actual
+      if (!row || row[COL.ENQ_NO] !== enqNo) {
+        return res.status(400).json({ error: "Lead not found or EnQ No mismatch" });
+      }
+
+      const destSheet = status === "Cold Lead" ? SHEETS.COLD_LEADS : SHEETS.NOT_QUALIFIED;
+
+      const leadData = [
+        getCurrentTimestamp(),
+        row[COL.ENQ_NO] || "",
+        row[COL.LEAD_FROM] || "",
+        row[COL.CLIENT_NAME] || "",
+        row[COL.PARTNER_TYPE] || "",
+        row[COL.PURPOSE] || "",
+        row[COL.LOCATION] || "",
+        row[COL.CONTACT_INFO] || "",
+        row[COL.CONCERN_PERSON] || "",
+        "",  // J - Status blank
+        "",  // K - Remarks blank
+      ];
+
+      await appendRow(destSheet, leadData);
+      await deleteRow(SHEET_NAME, rowIndex);
+
+      return res.json({
+        success: true,
+        message: `Lead moved to ${status === "Cold Lead" ? "Cold Leads" : "Not Qualified Leads"}`,
+        movedTo: destSheet,
+      });
+    }
+
+    // =============================
+    // DONE: Move to Proposal Done Leads
+    // =============================
+    if (status !== "Done") {
+      return res.status(400).json({ error: "Invalid status. Use 'Done', 'Cold Lead', or 'Not Qualified Lead'" });
+    }
+
+    // Update status so formula can fill Actual
     await updateCell(
       SHEET_NAME,
       `${colLetter(COL.STEP5_STATUS)}${rowIndex}`,
@@ -159,22 +198,16 @@ router.post("/update", async (req, res) => {
       return res.status(400).json({ error: "Lead not found or EnQ No mismatch" });
     }
 
-    // Pad row
     while (row.length <= MAX_FMS_COL) row.push("");
 
-    // Build destination row: A = current timestamp, B-AI = copy from FMS
-    const currentTimestamp = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
-    const destRow = [currentTimestamp]; // A = new timestamp
+    const currentTimestamp = getCurrentTimestamp();
+    const destRow = [currentTimestamp];
 
-    // Copy columns B(1) to AI(34) from FMS
     for (let c = 1; c <= MAX_FMS_COL; c++) {
       destRow.push(row[c] || "");
     }
 
-    // Append to Proposal Done Leads (data starts row 7, appendRow handles it)
     await appendRow(PROPOSAL_DONE_SHEET, destRow);
-
-    // Delete from FMS
     await deleteRow(SHEET_NAME, rowIndex);
 
     res.json({

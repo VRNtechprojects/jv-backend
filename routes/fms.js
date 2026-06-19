@@ -1,42 +1,41 @@
 const express = require("express");
 const router = express.Router();
-const {
-  SHEETS,
-  getSheetData,
-  updateCell,
-} = require("../utils/sheets");
+const { SHEETS, getSheetData, updateCell } = require("../utils/sheets");
 const { uploadFileToDrive, createDriveFolder } = require("../utils/drive");
 
 const SHEET_NAME = SHEETS.FMS;
 
 // Column mapping (0-indexed) - FMS sheet
 const COL = {
-  TIMESTAMP: 0,      // A
-  ENQ_NO: 1,         // B
-  LEAD_FROM: 2,      // C
-  CLIENT_NAME: 3,    // D
-  PARTNER_TYPE: 4,   // E
-  PURPOSE: 5,        // F
-  LOCATION: 6,       // G
-  CONTACT_INFO: 7,   // H
+  TIMESTAMP: 0, // A
+  ENQ_NO: 1, // B
+  LEAD_FROM: 2, // C
+  CLIENT_NAME: 3, // D
+  PARTNER_TYPE: 4, // E
+  PURPOSE: 5, // F
+  LOCATION: 6, // G
+  CONTACT_INFO: 7, // H
   CONCERN_PERSON: 8, // I
-  PLANNED: 9,        // J
-  ACTUAL: 10,        // K
-  STATUS: 11,        // L
+  PLANNED: 9, // J
+  ACTUAL: 10, // K
+  STATUS: 11, // L
   // M = Time Delay (formula, skip)
-  MAP_LOCATION: 13,  // N
-  AKS: 14,           // O
-  KHASRA: 15,        // P
-  OLD_DOCUMENT: 16,  // Q
-  LAND_SURVEY: 17,   // R
+  MAP_LOCATION: 13, // N
+  AKS: 14, // O
+  KHASRA: 15, // P
+  OLD_DOCUMENT: 16, // Q
+  LAND_SURVEY: 17, // R
   // ... other columns ...
-  PDF_FOLDER: 26,    // AA (index 26)
+  PDF_FOLDER: 26, // AA (index 26)
 };
 
 // Helper: column index to letter
 function colLetter(index) {
   if (index < 26) return String.fromCharCode(65 + index);
-  return String.fromCharCode(64 + Math.floor(index / 26)) + String.fromCharCode(65 + (index % 26));
+  return (
+    String.fromCharCode(64 + Math.floor(index / 26)) +
+    String.fromCharCode(65 + (index % 26))
+  );
 }
 
 // GET /api/fms/list - All FMS leads
@@ -78,7 +77,9 @@ router.get("/list", async (req, res) => {
     res.json({ leads });
   } catch (err) {
     console.error("FMS list error:", err);
-    res.status(500).json({ error: "Failed to fetch FMS", details: err.message });
+    res
+      .status(500)
+      .json({ error: "Failed to fetch FMS", details: err.message });
   }
 });
 
@@ -127,7 +128,9 @@ router.get("/step2", async (req, res) => {
     res.json({ leads });
   } catch (err) {
     console.error("FMS step2 error:", err);
-    res.status(500).json({ error: "Failed to fetch Step 2 leads", details: err.message });
+    res
+      .status(500)
+      .json({ error: "Failed to fetch Step 2 leads", details: err.message });
   }
 });
 
@@ -148,23 +151,35 @@ router.post("/step2/update", async (req, res) => {
     const folder = await createDriveFolder(folderName, parentFolderId);
     const folderLink = `https://drive.google.com/drive/folders/${folder.id}`;
 
-    const currentDateTime = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+    const currentDateTime = new Date().toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+    });
 
     // Update Actual (K), Status (L), PDF Folder (AA)
-    await updateCell(SHEET_NAME, `${colLetter(COL.ACTUAL)}${rowIndex}`, [currentDateTime]);
-    await updateCell(SHEET_NAME, `${colLetter(COL.STATUS)}${rowIndex}`, ["Done"]);
-    await updateCell(SHEET_NAME, `${colLetter(COL.PDF_FOLDER)}${rowIndex}`, [folderLink]);
+    await updateCell(SHEET_NAME, `${colLetter(COL.ACTUAL)}${rowIndex}`, [
+      currentDateTime,
+    ]);
+    await updateCell(SHEET_NAME, `${colLetter(COL.STATUS)}${rowIndex}`, [
+      "Done",
+    ]);
+    await updateCell(SHEET_NAME, `${colLetter(COL.PDF_FOLDER)}${rowIndex}`, [
+      folderLink,
+    ]);
 
     // Update Map Location (N) if provided
     if (mapLocation && mapLocation.trim()) {
-      await updateCell(SHEET_NAME, `${colLetter(COL.MAP_LOCATION)}${rowIndex}`, [mapLocation.trim()]);
+      await updateCell(
+        SHEET_NAME,
+        `${colLetter(COL.MAP_LOCATION)}${rowIndex}`,
+        [mapLocation.trim()],
+      );
     }
 
     res.json({
       success: true,
       message: "Step 2 completed",
       folderId: folder.id,
-      folderLink: folderLink
+      folderLink: folderLink,
     });
   } catch (err) {
     console.error("FMS step2 update error:", err);
@@ -175,30 +190,37 @@ router.post("/step2/update", async (req, res) => {
 // POST /api/fms/upload - Upload file to Drive and update sheet column
 router.post("/upload", async (req, res) => {
   try {
-    const { rowIndex, folderId, columnIndex, fileName, fileBase64, mimeType } = req.body;
+    const { rowIndex, folderId, columnIndex, fileName, fileBase64, mimeType } =
+      req.body;
 
     if (!rowIndex || !folderId || columnIndex === undefined || !fileBase64) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
     // Upload file to the folder
-    const file = await uploadFileToDrive(fileName, fileBase64, mimeType, folderId);
+    const file = await uploadFileToDrive(
+      fileName,
+      fileBase64,
+      mimeType,
+      folderId,
+    );
     const fileLink = `https://drive.google.com/file/d/${file.id}/view`;
 
     // Update the specific column with file link
-    await updateCell(SHEET_NAME, `${colLetter(columnIndex)}${rowIndex}`, [fileLink]);
+    await updateCell(SHEET_NAME, `${colLetter(columnIndex)}${rowIndex}`, [
+      fileLink,
+    ]);
 
     res.json({
       success: true,
       fileId: file.id,
-      fileLink: fileLink
+      fileLink: fileLink,
     });
   } catch (err) {
     console.error("FMS upload error:", err);
     res.status(500).json({ error: "Upload failed", details: err.message });
   }
 });
-
 
 const step3Routes = require("./fms/steps/step3");
 router.use("/step3", step3Routes);
@@ -214,5 +236,8 @@ router.use("/step6", step6Routes);
 
 const step7Routes = require("./fms/steps/step7");
 router.use("/step7", step7Routes);
+
+const proposalHoldRoutes = require("./fms/steps/proposalHold");
+router.use("/proposal-hold", proposalHoldRoutes);
 
 module.exports = router;
