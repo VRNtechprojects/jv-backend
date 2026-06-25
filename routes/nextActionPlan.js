@@ -8,38 +8,36 @@ const {
   findRowByEnqNo,
 } = require("../utils/sheets");
 
-const SHEET_NAME = SHEETS.NEXT_ACTION; 
+const SHEET_NAME = SHEETS.NEXT_ACTION;
 const USER_SHEET = "User";
 
 // Column mapping (A=0, B=1, ...)
 const COL = {
-  TICKET_ID: 0,       // A
-  ENQ_NO: 1,          // B
-  CLIENT_NAME: 2,     // C
-  LOCATION: 3,        // D
-  RAISED_BY: 4,       // E
-  RAISED_DATE: 5,     // F
-  ASSIGNED_TO: 6,     // G
-  ISSUE_DESC: 7,      // H
-  DESIRED_DATE: 8,    // I
-  STATUS: 9,          // J
-  CONFIRMED_DATE: 10, // K
-  REVISED_DATE: 11,   // L
-  REVISION_COUNT: 12, // M
-  REVISION_HISTORY: 13, // N
-  COMPLETION_DATE: 14,  // O
-  PC_REMARKS: 15,       // P
-  DOER_REMARKS: 16,     // Q
-  SOURCE_TAB: 17,       // R
-  STEP_NAME: 18,        // S
+  TICKET_ID: 0,
+  ENQ_NO: 1,
+  CLIENT_NAME: 2,
+  LOCATION: 3,
+  RAISED_BY: 4,
+  RAISED_DATE: 5,
+  ASSIGNED_TO: 6,
+  ISSUE_DESC: 7,
+  DESIRED_DATE: 8,
+  STATUS: 9,
+  CONFIRMED_DATE: 10,
+  REVISED_DATE: 11,
+  REVISION_COUNT: 12,
+  REVISION_HISTORY: 13,
+  COMPLETION_DATE: 14,
+  PC_REMARKS: 15,
+  DOER_REMARKS: 16,
+  SOURCE_TAB: 17,
+  STEP_NAME: 18,
 };
 
-// Helper: column index to letter (0=A, 1=B, ... 18=S)
 function colLetter(index) {
   return String.fromCharCode(65 + index);
 }
 
-// Helper: generate next Ticket ID
 async function generateTicketId() {
   try {
     const rows = await getSheetData(SHEET_NAME);
@@ -61,34 +59,33 @@ async function generateTicketId() {
   }
 }
 
-// Helper: build ticket object from row
+// ✅ FIX: .trim() added to ALL fields — especially assignedTo and raisedBy
 function rowToTicket(row, rowIndex) {
   return {
     rowIndex,
-    ticketId: row[COL.TICKET_ID] || "",
-    enqNo: row[COL.ENQ_NO] || "",
-    clientName: row[COL.CLIENT_NAME] || "",
-    location: row[COL.LOCATION] || "",
-    raisedBy: row[COL.RAISED_BY] || "",
-    raisedDate: row[COL.RAISED_DATE] || "",
-    assignedTo: row[COL.ASSIGNED_TO] || "",
-    issueDescription: row[COL.ISSUE_DESC] || "",
-    desiredDate: row[COL.DESIRED_DATE] || "",
-    status: row[COL.STATUS] || "Open",
-    confirmedDate: row[COL.CONFIRMED_DATE] || "",
-    revisedDate: row[COL.REVISED_DATE] || "",
-    revisionCount: row[COL.REVISION_COUNT] || "0",
-    revisionHistory: row[COL.REVISION_HISTORY] || "",
-    completionDate: row[COL.COMPLETION_DATE] || "",
-    pcRemarks: row[COL.PC_REMARKS] || "",
-    doerRemarks: row[COL.DOER_REMARKS] || "",
-    sourceTab: row[COL.SOURCE_TAB] || "",
-    stepName: row[COL.STEP_NAME] || "",
+    ticketId: (row[COL.TICKET_ID] || "").trim(),
+    enqNo: (row[COL.ENQ_NO] || "").trim(),
+    clientName: (row[COL.CLIENT_NAME] || "").trim(),
+    location: (row[COL.LOCATION] || "").trim(),
+    raisedBy: (row[COL.RAISED_BY] || "").trim(),
+    raisedDate: (row[COL.RAISED_DATE] || "").trim(),
+    assignedTo: (row[COL.ASSIGNED_TO] || "").trim(),
+    issueDescription: (row[COL.ISSUE_DESC] || "").trim(),
+    desiredDate: (row[COL.DESIRED_DATE] || "").trim(),
+    status: (row[COL.STATUS] || "Open").trim(),
+    confirmedDate: (row[COL.CONFIRMED_DATE] || "").trim(),
+    revisedDate: (row[COL.REVISED_DATE] || "").trim(),
+    revisionCount: (row[COL.REVISION_COUNT] || "0").trim(),
+    revisionHistory: (row[COL.REVISION_HISTORY] || "").trim(),
+    completionDate: (row[COL.COMPLETION_DATE] || "").trim(),
+    pcRemarks: (row[COL.PC_REMARKS] || "").trim(),
+    doerRemarks: (row[COL.DOER_REMARKS] || "").trim(),
+    sourceTab: (row[COL.SOURCE_TAB] || "").trim(),
+    stepName: (row[COL.STEP_NAME] || "").trim(),
   };
 }
 
 // ─── GET /api/next-action-plan/list ──────────────────────
-// Query params: assignedTo, status, raisedBy
 router.get("/list", async (req, res) => {
   try {
     const rows = await getSheetData(SHEET_NAME);
@@ -100,25 +97,25 @@ router.get("/list", async (req, res) => {
     let tickets = [];
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
-      if (!row || !row[COL.TICKET_ID]) continue;
-      tickets.push(rowToTicket(row, i + 1)); // i+1 = 1-based sheet row
+      if (!row || !(row[COL.TICKET_ID] || "").trim()) continue;
+      tickets.push(rowToTicket(row, i + 1));
     }
 
-    // Apply filters
+    // Apply filters — ✅ trim() added to query params too
     const { assignedTo, status, raisedBy } = req.query;
     if (assignedTo) {
       tickets = tickets.filter(
-        (t) => t.assignedTo.toLowerCase() === assignedTo.toLowerCase()
+        (t) => t.assignedTo.toLowerCase() === assignedTo.trim().toLowerCase()
       );
     }
     if (status) {
       tickets = tickets.filter(
-        (t) => t.status.toLowerCase() === status.toLowerCase()
+        (t) => t.status.toLowerCase() === status.trim().toLowerCase()
       );
     }
     if (raisedBy) {
       tickets = tickets.filter(
-        (t) => t.raisedBy.toLowerCase() === raisedBy.toLowerCase()
+        (t) => t.raisedBy.toLowerCase() === raisedBy.trim().toLowerCase()
       );
     }
 
@@ -130,7 +127,6 @@ router.get("/list", async (req, res) => {
 });
 
 // ─── GET /api/next-action-plan/my-tickets ────────────────
-// Returns non-completed tickets assigned to the logged-in user
 router.get("/my-tickets", async (req, res) => {
   try {
     const { userName } = req.query;
@@ -141,15 +137,18 @@ router.get("/my-tickets", async (req, res) => {
       return res.json({ tickets: [] });
     }
 
+    // ✅ FIX: trim() on userName comparison
+    const normalizedUserName = userName.trim().toLowerCase();
+
     const tickets = [];
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
-      if (!row || !row[COL.TICKET_ID]) continue;
+      if (!row || !(row[COL.TICKET_ID] || "").trim()) continue;
 
-      const assignedTo = (row[COL.ASSIGNED_TO] || "").toLowerCase();
-      const status = (row[COL.STATUS] || "").toLowerCase();
+      const assignedTo = (row[COL.ASSIGNED_TO] || "").trim().toLowerCase();
+      const status = (row[COL.STATUS] || "").trim().toLowerCase();
 
-      if (assignedTo === userName.toLowerCase() && status !== "completed") {
+      if (assignedTo === normalizedUserName && status !== "completed") {
         tickets.push(rowToTicket(row, i + 1));
       }
     }
@@ -185,26 +184,27 @@ router.post("/create", async (req, res) => {
       timeZone: "Asia/Kolkata",
     });
 
+    // ✅ FIX: trim() all values before saving
     const newRow = [
-      ticketId,              // A - Ticket ID
-      enqNo,                 // B - EnQ No
-      clientName || "",      // C - Client Name
-      location || "",        // D - Location
-      raisedBy || "",        // E - Raised By
-      raisedDate,            // F - Raised Date
-      assignedTo,            // G - Assigned To
-      issueDescription,      // H - Issue Description
-      desiredDate,           // I - Desired Date
-      "Open",                // J - Status
-      "",                    // K - Confirmed Date
-      "",                    // L - Revised Date
-      "0",                   // M - Revision Count
-      "",                    // N - Revision History
-      "",                    // O - Completion Date
-      "",                    // P - PC Remarks
-      "",                    // Q - Doer Remarks
-      sourceTab || "",       // R - Source Tab
-      stepName || "",        // S - Step Name
+      ticketId,
+      (enqNo || "").trim(),
+      (clientName || "").trim(),
+      (location || "").trim(),
+      (raisedBy || "").trim(),
+      raisedDate,
+      (assignedTo || "").trim(),
+      (issueDescription || "").trim(),
+      (desiredDate || "").trim(),
+      "Open",
+      "",
+      "",
+      "0",
+      "",
+      "",
+      "",
+      "",
+      (sourceTab || "").trim(),
+      (stepName || "").trim(),
     ];
 
     await appendRow(SHEET_NAME, newRow);
@@ -233,20 +233,17 @@ router.post("/update", async (req, res) => {
       return res.status(400).json({ error: "rowIndex is required" });
     }
 
-    // Read current row to get existing data
     const rows = await getSheetData(SHEET_NAME);
-    const currentRow = rows[rowIndex - 1]; // rowIndex is 1-based
+    const currentRow = rows[rowIndex - 1];
     if (!currentRow) {
       return res.status(404).json({ error: "Ticket not found" });
     }
 
-    // Collect all cell updates: { col: columnIndex, val: newValue }
     const updates = [];
 
     if (status !== undefined) {
       updates.push({ col: COL.STATUS, val: status });
 
-      // If marking completed, auto-fill completion date
       if (status === "Completed") {
         const now = new Date().toLocaleString("en-IN", {
           timeZone: "Asia/Kolkata",
@@ -254,7 +251,6 @@ router.post("/update", async (req, res) => {
         updates.push({ col: COL.COMPLETION_DATE, val: completionDate || now });
       }
 
-      // If date revision requested, increment count and add to history
       if (status === "Date Revision Requested" && revisedDate) {
         const currentCount = parseInt(currentRow[COL.REVISION_COUNT] || "0", 10);
         const newCount = currentCount + 1;
@@ -271,8 +267,7 @@ router.post("/update", async (req, res) => {
 
     if (confirmedDate !== undefined) {
       updates.push({ col: COL.CONFIRMED_DATE, val: confirmedDate });
-      // If PC confirms and status is still Open, auto-set to PC Confirmed
-      const currentStatus = currentRow[COL.STATUS] || "";
+      const currentStatus = (currentRow[COL.STATUS] || "").trim();
       if (currentStatus === "Open") {
         updates.push({ col: COL.STATUS, val: "PC Confirmed" });
       }
@@ -290,8 +285,6 @@ router.post("/update", async (req, res) => {
       updates.push({ col: COL.DOER_REMARKS, val: doerRemarks });
     }
 
-    // Apply all updates one cell at a time
-    // updateCell(sheetName, range, values) — values must be array
     for (const update of updates) {
       const cellRange = `${colLetter(update.col)}${rowIndex}`;
       await updateCell(SHEET_NAME, cellRange, [update.val]);
@@ -305,7 +298,6 @@ router.post("/update", async (req, res) => {
 });
 
 // ─── GET /api/next-action-plan/users ─────────────────────
-// Fetch all users from User sheet for dropdown
 router.get("/users", async (req, res) => {
   try {
     const rows = await getSheetData(USER_SHEET);
@@ -318,9 +310,9 @@ router.get("/users", async (req, res) => {
       const row = rows[i];
       if (!row || !row[0]) continue;
       users.push({
-        id: row[0],        // A - ID
-        userName: row[2],   // C - User name
-        role: row[3],       // D - Role
+        id: (row[0] || "").trim(),
+        userName: (row[2] || "").trim(),
+        role: (row[3] || "").trim(),
       });
     }
 
@@ -332,7 +324,6 @@ router.get("/users", async (req, res) => {
 });
 
 // ─── GET /api/next-action-plan/overdue ───────────────────
-// Check for overdue tickets and mark them
 router.get("/overdue", async (req, res) => {
   try {
     const rows = await getSheetData(SHEET_NAME);
@@ -345,12 +336,11 @@ router.get("/overdue", async (req, res) => {
 
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
-      if (!row || !row[COL.TICKET_ID]) continue;
+      if (!row || !(row[COL.TICKET_ID] || "").trim()) continue;
 
-      const status = (row[COL.STATUS] || "").toLowerCase();
+      const status = (row[COL.STATUS] || "").trim().toLowerCase();
       if (status === "completed") continue;
 
-      // Check the most relevant date
       const checkDate =
         row[COL.REVISED_DATE] || row[COL.CONFIRMED_DATE] || row[COL.DESIRED_DATE];
       if (!checkDate) continue;
@@ -359,7 +349,6 @@ router.get("/overdue", async (req, res) => {
       if (isNaN(dueDate.getTime())) continue;
 
       if (now > dueDate) {
-        // Mark as overdue in sheet if not already
         if (status !== "overdue") {
           const cellRange = `${colLetter(COL.STATUS)}${i + 1}`;
           await updateCell(SHEET_NAME, cellRange, ["Overdue"]);
@@ -367,12 +356,12 @@ router.get("/overdue", async (req, res) => {
 
         overdueTickets.push({
           rowIndex: i + 1,
-          ticketId: row[COL.TICKET_ID] || "",
-          enqNo: row[COL.ENQ_NO] || "",
-          clientName: row[COL.CLIENT_NAME] || "",
-          assignedTo: row[COL.ASSIGNED_TO] || "",
-          desiredDate: row[COL.DESIRED_DATE] || "",
-          revisedDate: row[COL.REVISED_DATE] || "",
+          ticketId: (row[COL.TICKET_ID] || "").trim(),
+          enqNo: (row[COL.ENQ_NO] || "").trim(),
+          clientName: (row[COL.CLIENT_NAME] || "").trim(),
+          assignedTo: (row[COL.ASSIGNED_TO] || "").trim(),
+          desiredDate: (row[COL.DESIRED_DATE] || "").trim(),
+          revisedDate: (row[COL.REVISED_DATE] || "").trim(),
           status: "Overdue",
         });
       }
