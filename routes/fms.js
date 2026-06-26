@@ -1,6 +1,12 @@
 const express = require("express");
 const router = express.Router();
-const { SHEETS, getSheetData, updateCell } = require("../utils/sheets");
+const {
+  SHEETS,
+  getSheetData,
+  updateCell,
+  appendRow,
+  deleteRow,
+} = require("../utils/sheets");
 const { uploadFileToDrive, createDriveFolder } = require("../utils/drive");
 
 const SHEET_NAME = SHEETS.FMS;
@@ -38,7 +44,14 @@ function colLetter(index) {
   );
 }
 
+// Helper: get current timestamp in IST
+function getCurrentTimestamp() {
+  return new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+}
+
+// ============================================
 // GET /api/fms/list - All FMS leads
+// ============================================
 router.get("/list", async (req, res) => {
   try {
     const data = await getSheetData(SHEET_NAME);
@@ -83,7 +96,9 @@ router.get("/list", async (req, res) => {
   }
 });
 
+// ============================================
 // GET /api/fms/step2 - Step 2 leads (Planned not empty, Actual empty)
+// ============================================
 router.get("/step2", async (req, res) => {
   try {
     const data = await getSheetData(SHEET_NAME);
@@ -134,60 +149,150 @@ router.get("/step2", async (req, res) => {
   }
 });
 
-// POST /api/fms/step2/update - Update Step 2 with document uploads
+// ============================================
+// POST /api/fms/step2/update
+// Handles BOTH:
+//   1. Status = "Done" → Create folder, upload documents
+//   2. Status = "Cold Lead" / "Back to Pipeline" / "Not Qualified Lead" → Move to another sheet
+// ============================================
 router.post("/step2/update", async (req, res) => {
   try {
-    const { rowIndex, enqNo, location, clientName, mapLocation } = req.body;
+    const {
+      rowIndex,
+      enqNo,
+      location,
+      clientName,
+      mapLocation,
+      status,
+      remark,
+    } = req.body;
 
     if (!rowIndex || !enqNo) {
-      return res.status(400).json({ error: "rowIndex and enqNo are required" });
+      return res.status(400).json({
+        success: false,
+        error: "rowIndex and enqNo are required",
+      });
     }
 
-    // Create folder name: ClientName(Location)
-    const folderName = `${clientName || "Unknown"}(${location || ""})`;
+    // =============================
+    // CASE 1: STATUS = DONE
+    // (Folder creation + file upload preparation)
+    // =============================
+    if (!status || status === "Done") {
+      // Create folder name: ClientName(Location)
+      const folderName = `${clientName || "Unknown"}(${location || ""})`;
 
-    // Create folder in Google Drive
-    const parentFolderId = "0AKlw__VHWUaAUk9PVA";
-    const folder = await createDriveFolder(folderName, parentFolderId);
-    const folderLink = `https://drive.google.com/drive/folders/${folder.id}`;
+      // Create folder in Google Drive
+      const parentFolderId = "0AKlw__VHWUaAUk9PVA";
+      const folder = await createDriveFolder(folderName, parentFolderId);
+      const folderLink = `https://drive.google.com/drive/folders/${folder.id}`;
 
-    const currentDateTime = new Date().toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
-    });
+      const currentDateTime = getCurrentTimestamp();
 
-    // Update Actual (K), Status (L), PDF Folder (AA)
-    await updateCell(SHEET_NAME, `${colLetter(COL.ACTUAL)}${rowIndex}`, [
-      currentDateTime,
-    ]);
-    await updateCell(SHEET_NAME, `${colLetter(COL.STATUS)}${rowIndex}`, [
-      "Done",
-    ]);
-    await updateCell(SHEET_NAME, `${colLetter(COL.PDF_FOLDER)}${rowIndex}`, [
-      folderLink,
-    ]);
+      // Update Actual (K), Status (L), PDF Folder (AA)
+      await updateCell(SHEET_NAME, `${colLetter(COL.ACTUAL)}${rowIndex}`, [
+        currentDateTime,
+      ]);
+      await updateCell(SHEET_NAME, `${colLetter(COL.STATUS)}${rowIndex}`, [
+        "Done",
+      ]);
+      await updateCell(SHEET_NAME, `${colLetter(COL.PDF_FOLDER)}${rowIndex}`, [
+        folderLink,
+      ]);
 
-    // Update Map Location (N) if provided
-    if (mapLocation && mapLocation.trim()) {
-      await updateCell(
-        SHEET_NAME,
-        `${colLetter(COL.MAP_LOCATION)}${rowIndex}`,
-        [mapLocation.trim()],
-      );
+      // Update Map Location (N) if provided
+      if (mapLocation && mapLocation.trim()) {
+        await updateCell(
+          SHEET_NAME,
+          `${colLetter(COL.MAP_LOCATION)}${rowIndex}`,
+          [mapLocation.trim()],
+        );
+      }
+
+      return res.json({
+        success: true,
+        message: "Step 2 completed",
+        folderId: folder.id,
+        folderLink: folderLink,
+      });
     }
 
-    res.json({
+    // =============================
+    // CASE 2: MOVE TO OTHER SHEETS
+    // (Cold Lead / Back to Pipeline / Not Qualified Lead)
+    // =============================
+    const validMoveStatuses = ["Cold Lead", "Back to Pipeline", "Not Qualified Lead"];
+    if (!validMoveStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid status for move operation",
+      });
+    }
+
+    // Get the lead data
+    const data = await getSheetData(SHEET_NAME);
+    const row = data[rowIndex - 1]; // Convert to 0-indexed
+
+    if (!row || row[COL.ENQ_NO] !== enqNo) {
+      return res.status(400).json({
+        success: false,
+        error: "Lead not found or EnQ No mismatch",
+      });
+    }
+
+    // Prepare data for destination (A-I + Status J + Remark K)
+    const leadData = [
+      getCurrentTimestamp(),         // A - Current timestamp
+      row[COL.ENQ_NO] || "",         // B
+      row[COL.LEAD_FROM] || "",      // C
+      row[COL.CLIENT_NAME] || "",    // D
+      row[COL.PARTNER_TYPE] || "",   // E
+      row[COL.PURPOSE] || "",        // F
+      row[COL.LOCATION] || "",       // G
+      row[COL.CONTACT_INFO] || "",   // H
+      row[COL.CONCERN_PERSON] || "", // I
+      "",                            // J - Status (blank)
+      remark || "",                  // K - Remark
+    ];
+
+    // Determine destination sheet
+    let destSheet;
+    switch (status) {
+      case "Cold Lead":
+        destSheet = SHEETS.COLD_LEADS;
+        break;
+      case "Back to Pipeline":
+        destSheet = SHEETS.PIPELINE;
+        break;
+      case "Not Qualified Lead":
+        destSheet = SHEETS.NOT_QUALIFIED;
+        break;
+    }
+
+    // Append to destination sheet
+    await appendRow(destSheet, leadData);
+
+    // Delete from FMS
+    await deleteRow(SHEET_NAME, rowIndex);
+
+    return res.json({
       success: true,
-      message: "Step 2 completed",
-      folderId: folder.id,
-      folderLink: folderLink,
+      message: `Lead moved to ${status === "Back to Pipeline" ? "Pipeline" : status}`,
+      movedTo: destSheet,
     });
   } catch (err) {
     console.error("FMS step2 update error:", err);
-    res.status(500).json({ error: "Update failed", details: err.message });
+    res.status(500).json({
+      success: false,
+      error: "Update failed",
+      details: err.message,
+    });
   }
 });
 
+// ============================================
 // POST /api/fms/upload - Upload file to Drive and update sheet column
+// ============================================
 router.post("/upload", async (req, res) => {
   try {
     const { rowIndex, folderId, columnIndex, fileName, fileBase64, mimeType } =
@@ -222,6 +327,9 @@ router.post("/upload", async (req, res) => {
   }
 });
 
+// ============================================
+// Sub-route mounting
+// ============================================
 const step3Routes = require("./fms/steps/step3");
 router.use("/step3", step3Routes);
 
