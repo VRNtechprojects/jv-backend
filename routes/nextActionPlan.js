@@ -5,13 +5,11 @@ const {
   getSheetData,
   appendRow,
   updateCell,
-  findRowByEnqNo,
 } = require("../utils/sheets");
 
 const SHEET_NAME = SHEETS.NEXT_ACTION;
 const USER_SHEET = "User";
 
-// Column mapping (A=0, B=1, ...)
 const COL = {
   TICKET_ID: 0,
   ENQ_NO: 1,
@@ -38,6 +36,37 @@ function colLetter(index) {
   return String.fromCharCode(65 + index);
 }
 
+// ✅ HELPER: Parse DD/MM/YYYY or DD/MM/YYYY HH:MM:SS to JS Date
+function parseSheetDate(dateStr) {
+  if (!dateStr) return null;
+  const str = String(dateStr).trim();
+  if (!str) return null;
+
+  // Try DD/MM/YYYY format (with optional time)
+  const ddmmMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[, ]+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (ddmmMatch) {
+    const [, dd, mm, yyyy, hh, mi, ss] = ddmmMatch;
+    return new Date(
+      parseInt(yyyy),
+      parseInt(mm) - 1,  // month 0-indexed
+      parseInt(dd),
+      parseInt(hh || 0),
+      parseInt(mi || 0),
+      parseInt(ss || 0)
+    );
+  }
+
+  // Try ISO format YYYY-MM-DD
+  const isoMatch = str.match(/^\d{4}-\d{2}-\d{2}/);
+  if (isoMatch) {
+    return new Date(str);
+  }
+
+  // Fallback
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 async function generateTicketId() {
   try {
     const rows = await getSheetData(SHEET_NAME);
@@ -59,7 +88,6 @@ async function generateTicketId() {
   }
 }
 
-// ✅ FIX: .trim() added to ALL fields — especially assignedTo and raisedBy
 function rowToTicket(row, rowIndex) {
   return {
     rowIndex,
@@ -85,14 +113,11 @@ function rowToTicket(row, rowIndex) {
   };
 }
 
-// ─── GET /api/next-action-plan/list ──────────────────────
+// GET /list
 router.get("/list", async (req, res) => {
   try {
     const rows = await getSheetData(SHEET_NAME);
-
-    if (!rows || rows.length <= 1) {
-      return res.json({ tickets: [] });
-    }
+    if (!rows || rows.length <= 1) return res.json({ tickets: [] });
 
     let tickets = [];
     for (let i = 1; i < rows.length; i++) {
@@ -101,23 +126,10 @@ router.get("/list", async (req, res) => {
       tickets.push(rowToTicket(row, i + 1));
     }
 
-    // Apply filters — ✅ trim() added to query params too
     const { assignedTo, status, raisedBy } = req.query;
-    if (assignedTo) {
-      tickets = tickets.filter(
-        (t) => t.assignedTo.toLowerCase() === assignedTo.trim().toLowerCase()
-      );
-    }
-    if (status) {
-      tickets = tickets.filter(
-        (t) => t.status.toLowerCase() === status.trim().toLowerCase()
-      );
-    }
-    if (raisedBy) {
-      tickets = tickets.filter(
-        (t) => t.raisedBy.toLowerCase() === raisedBy.trim().toLowerCase()
-      );
-    }
+    if (assignedTo) tickets = tickets.filter((t) => t.assignedTo.toLowerCase() === assignedTo.trim().toLowerCase());
+    if (status) tickets = tickets.filter((t) => t.status.toLowerCase() === status.trim().toLowerCase());
+    if (raisedBy) tickets = tickets.filter((t) => t.raisedBy.toLowerCase() === raisedBy.trim().toLowerCase());
 
     res.json({ tickets });
   } catch (err) {
@@ -126,21 +138,18 @@ router.get("/list", async (req, res) => {
   }
 });
 
-// ─── GET /api/next-action-plan/my-tickets ────────────────
+// GET /my-tickets
 router.get("/my-tickets", async (req, res) => {
   try {
     const { userName } = req.query;
     if (!userName) return res.status(400).json({ error: "userName required" });
 
     const rows = await getSheetData(SHEET_NAME);
-    if (!rows || rows.length <= 1) {
-      return res.json({ tickets: [] });
-    }
+    if (!rows || rows.length <= 1) return res.json({ tickets: [] });
 
-    // ✅ FIX: trim() on userName comparison
-    const normalizedUserName = userName.trim().toLowerCase();
-
+    const normalized = userName.trim().toLowerCase();
     const tickets = [];
+
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
       if (!row || !(row[COL.TICKET_ID] || "").trim()) continue;
@@ -148,7 +157,7 @@ router.get("/my-tickets", async (req, res) => {
       const assignedTo = (row[COL.ASSIGNED_TO] || "").trim().toLowerCase();
       const status = (row[COL.STATUS] || "").trim().toLowerCase();
 
-      if (assignedTo === normalizedUserName && status !== "completed") {
+      if (assignedTo === normalized && status !== "completed") {
         tickets.push(rowToTicket(row, i + 1));
       }
     }
@@ -160,31 +169,18 @@ router.get("/my-tickets", async (req, res) => {
   }
 });
 
-// ─── POST /api/next-action-plan/create ───────────────────
+// POST /create
 router.post("/create", async (req, res) => {
   try {
-    const {
-      enqNo,
-      clientName,
-      location,
-      raisedBy,
-      assignedTo,
-      issueDescription,
-      desiredDate,
-      sourceTab,
-      stepName,
-    } = req.body;
+    const { enqNo, clientName, location, raisedBy, assignedTo, issueDescription, desiredDate, sourceTab, stepName } = req.body;
 
     if (!enqNo || !assignedTo || !issueDescription || !desiredDate) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
     const ticketId = await generateTicketId();
-    const raisedDate = new Date().toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
-    });
+    const raisedDate = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 
-    // ✅ FIX: trim() all values before saving
     const newRow = [
       ticketId,
       (enqNo || "").trim(),
@@ -196,19 +192,12 @@ router.post("/create", async (req, res) => {
       (issueDescription || "").trim(),
       (desiredDate || "").trim(),
       "Open",
-      "",
-      "",
-      "0",
-      "",
-      "",
-      "",
-      "",
+      "", "", "0", "", "", "", "",
       (sourceTab || "").trim(),
       (stepName || "").trim(),
     ];
 
     await appendRow(SHEET_NAME, newRow);
-
     res.json({ success: true, ticketId, message: "Ticket created successfully" });
   } catch (err) {
     console.error("Error creating ticket:", err);
@@ -216,59 +205,43 @@ router.post("/create", async (req, res) => {
   }
 });
 
-// ─── POST /api/next-action-plan/update ───────────────────
+// POST /update — ✅ FIXED
 router.post("/update", async (req, res) => {
   try {
-    const {
-      rowIndex,
-      status,
-      confirmedDate,
-      revisedDate,
-      pcRemarks,
-      doerRemarks,
-      completionDate,
-    } = req.body;
+    const { rowIndex, status, confirmedDate, revisedDate, pcRemarks, doerRemarks, completionDate } = req.body;
 
-    if (!rowIndex) {
-      return res.status(400).json({ error: "rowIndex is required" });
-    }
+    if (!rowIndex) return res.status(400).json({ error: "rowIndex is required" });
 
     const rows = await getSheetData(SHEET_NAME);
     const currentRow = rows[rowIndex - 1];
-    if (!currentRow) {
-      return res.status(404).json({ error: "Ticket not found" });
-    }
+    if (!currentRow) return res.status(404).json({ error: "Ticket not found" });
 
     const updates = [];
 
-    if (status !== undefined) {
+    // ✅ Handle "Date Revision Requested" FIRST
+    if (status === "Date Revision Requested" && revisedDate) {
+      const currentCount = parseInt((currentRow[COL.REVISION_COUNT] || "0").toString().trim(), 10);
+      const newCount = currentCount + 1;
+      const currentHistory = (currentRow[COL.REVISION_HISTORY] || "").toString().trim();
+      const newHistory = currentHistory ? `${currentHistory}, ${revisedDate}` : revisedDate;
+
+      updates.push({ col: COL.STATUS, val: "Date Revision Requested" });  // ✅ Overwrites "Overdue"
+      updates.push({ col: COL.REVISED_DATE, val: revisedDate });
+      updates.push({ col: COL.REVISION_COUNT, val: String(newCount) });
+      updates.push({ col: COL.REVISION_HISTORY, val: newHistory });
+    } else if (status !== undefined) {
       updates.push({ col: COL.STATUS, val: status });
 
       if (status === "Completed") {
-        const now = new Date().toLocaleString("en-IN", {
-          timeZone: "Asia/Kolkata",
-        });
+        const now = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
         updates.push({ col: COL.COMPLETION_DATE, val: completionDate || now });
-      }
-
-      if (status === "Date Revision Requested" && revisedDate) {
-        const currentCount = parseInt(currentRow[COL.REVISION_COUNT] || "0", 10);
-        const newCount = currentCount + 1;
-        const currentHistory = currentRow[COL.REVISION_HISTORY] || "";
-        const newHistory = currentHistory
-          ? `${currentHistory}, ${revisedDate}`
-          : revisedDate;
-
-        updates.push({ col: COL.REVISION_COUNT, val: String(newCount) });
-        updates.push({ col: COL.REVISION_HISTORY, val: newHistory });
-        updates.push({ col: COL.REVISED_DATE, val: revisedDate });
       }
     }
 
     if (confirmedDate !== undefined) {
       updates.push({ col: COL.CONFIRMED_DATE, val: confirmedDate });
       const currentStatus = (currentRow[COL.STATUS] || "").trim();
-      if (currentStatus === "Open") {
+      if ((currentStatus === "Open" || currentStatus === "Overdue") && !status) {
         updates.push({ col: COL.STATUS, val: "PC Confirmed" });
       }
     }
@@ -277,13 +250,8 @@ router.post("/update", async (req, res) => {
       updates.push({ col: COL.REVISED_DATE, val: revisedDate });
     }
 
-    if (pcRemarks !== undefined) {
-      updates.push({ col: COL.PC_REMARKS, val: pcRemarks });
-    }
-
-    if (doerRemarks !== undefined) {
-      updates.push({ col: COL.DOER_REMARKS, val: doerRemarks });
-    }
+    if (pcRemarks !== undefined) updates.push({ col: COL.PC_REMARKS, val: pcRemarks });
+    if (doerRemarks !== undefined) updates.push({ col: COL.DOER_REMARKS, val: doerRemarks });
 
     for (const update of updates) {
       const cellRange = `${colLetter(update.col)}${rowIndex}`;
@@ -297,13 +265,11 @@ router.post("/update", async (req, res) => {
   }
 });
 
-// ─── GET /api/next-action-plan/users ─────────────────────
+// GET /users
 router.get("/users", async (req, res) => {
   try {
     const rows = await getSheetData(USER_SHEET);
-    if (!rows || rows.length <= 1) {
-      return res.json({ users: [] });
-    }
+    if (!rows || rows.length <= 1) return res.json({ users: [] });
 
     const users = [];
     for (let i = 1; i < rows.length; i++) {
@@ -323,47 +289,75 @@ router.get("/users", async (req, res) => {
   }
 });
 
-// ─── GET /api/next-action-plan/overdue ───────────────────
+// GET /overdue — ✅ FIXED
+// Only marks as Overdue, but ALSO clears Overdue if revision/confirmation date is now in future
 router.get("/overdue", async (req, res) => {
   try {
     const rows = await getSheetData(SHEET_NAME);
-    if (!rows || rows.length <= 1) {
-      return res.json({ tickets: [] });
-    }
+    if (!rows || rows.length <= 1) return res.json({ tickets: [] });
 
     const now = new Date();
     const overdueTickets = [];
 
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
-      if (!row || !(row[COL.TICKET_ID] || "").trim()) continue;
+      if (!row || !(row[COL.TICKET_ID] || "").toString().trim()) continue;
 
-      const status = (row[COL.STATUS] || "").trim().toLowerCase();
-      if (status === "completed") continue;
+      const status = (row[COL.STATUS] || "").toString().trim();
+      const statusLower = status.toLowerCase();
 
-      const checkDate =
-        row[COL.REVISED_DATE] || row[COL.CONFIRMED_DATE] || row[COL.DESIRED_DATE];
-      if (!checkDate) continue;
+      // Skip completed/rejected
+      if (statusLower === "completed" || statusLower === "rejected") continue;
 
-      const dueDate = new Date(checkDate);
-      if (isNaN(dueDate.getTime())) continue;
+      // Priority: Revised > Confirmed > Desired
+      const revisedDateStr = (row[COL.REVISED_DATE] || "").toString().trim();
+      const confirmedDateStr = (row[COL.CONFIRMED_DATE] || "").toString().trim();
+      const desiredDateStr = (row[COL.DESIRED_DATE] || "").toString().trim();
 
-      if (now > dueDate) {
-        if (status !== "overdue") {
+      const checkDateStr = revisedDateStr || confirmedDateStr || desiredDateStr;
+      if (!checkDateStr) continue;
+
+      const dueDate = parseSheetDate(checkDateStr);
+      if (!dueDate) continue;
+
+      // ✅ Set END of day — lead is overdue ONLY after the day ends
+      dueDate.setHours(23, 59, 59, 999);
+
+      const isPastDue = now > dueDate;
+
+      if (isPastDue) {
+        // Mark as Overdue only if currently not Overdue and not in active state
+        if (statusLower !== "overdue") {
           const cellRange = `${colLetter(COL.STATUS)}${i + 1}`;
           await updateCell(SHEET_NAME, cellRange, ["Overdue"]);
         }
 
         overdueTickets.push({
           rowIndex: i + 1,
-          ticketId: (row[COL.TICKET_ID] || "").trim(),
-          enqNo: (row[COL.ENQ_NO] || "").trim(),
-          clientName: (row[COL.CLIENT_NAME] || "").trim(),
-          assignedTo: (row[COL.ASSIGNED_TO] || "").trim(),
-          desiredDate: (row[COL.DESIRED_DATE] || "").trim(),
-          revisedDate: (row[COL.REVISED_DATE] || "").trim(),
+          ticketId: (row[COL.TICKET_ID] || "").toString().trim(),
+          enqNo: (row[COL.ENQ_NO] || "").toString().trim(),
+          clientName: (row[COL.CLIENT_NAME] || "").toString().trim(),
+          assignedTo: (row[COL.ASSIGNED_TO] || "").toString().trim(),
+          desiredDate: desiredDateStr,
+          revisedDate: revisedDateStr,
           status: "Overdue",
         });
+      } else {
+        // ✅ NEW: Date is in future but status is still "Overdue" — RESTORE
+        if (statusLower === "overdue") {
+          // Determine correct status to restore based on context
+          let restoredStatus = "Open";
+          const revCount = parseInt((row[COL.REVISION_COUNT] || "0").toString().trim(), 10);
+
+          if (revCount > 0 && revisedDateStr) {
+            restoredStatus = "Date Revision Requested";
+          } else if (confirmedDateStr) {
+            restoredStatus = "PC Confirmed";
+          }
+
+          const cellRange = `${colLetter(COL.STATUS)}${i + 1}`;
+          await updateCell(SHEET_NAME, cellRange, [restoredStatus]);
+        }
       }
     }
 
