@@ -24,6 +24,7 @@ app.use("/api/next-action-plan", require("./routes/nextActionPlan"));
 app.use("/api/site-visit/ecs", require("./routes/siteVisitEcs"));
 app.use("/api/site-visit/fms", require("./routes/siteVisitFms"));
 app.use("/api/remarks", remarksRoutes);
+app.use("/api/lead-assignment", require("./routes/leadAssignment"));
 
 // Health check
 app.get("/api/health", (req, res) => {
